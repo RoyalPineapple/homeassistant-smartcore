@@ -72,13 +72,13 @@ class Target:
 
     @classmethod
     def short(cls, address: int) -> "Target":
-        if not 0 <= address <= 63:
+        if type(address) is not int or not 0 <= address <= 63:
             raise ValueError(f"short address out of range: {address}")
         return cls(TargetType.SHORT, address)
 
     @classmethod
     def group(cls, group: int) -> "Target":
-        if not 0 <= group <= 15:
+        if type(group) is not int or not 0 <= group <= 15:
             raise ValueError(f"group out of range: {group}")
         return cls(TargetType.GROUP, group)
 
@@ -113,8 +113,10 @@ class Frame:
     priority: int = 3
 
     def __post_init__(self) -> None:
+        if self.bits not in (16, 24, 25) or len(self.data) != (self.bits + 7) // 8:
+            raise ValueError("Frame length does not match 16/24/25-bit encoding")
         for b in self.data:
-            if not 0 <= b <= MASK:
+            if type(b) is not int or not 0 <= b <= MASK:
                 raise ValueError(f"frame byte out of range: {b}")
 
 
@@ -184,6 +186,85 @@ def dali_level_to_ha_brightness(dali_level: int) -> int:
     if dali_level <= 0:
         return 0
     return max(1, min(255, round(dali_level / DALI_MAX * 255)))
+
+
+# IEC 62386-209:2011. Definitions independently checked against python-dali
+# b1881c008aca0b269fd09b8834dd9bdc0f1a735b; see docs/rgbw.md.
+OP_DT8_ACTIVATE = 0xE2
+OP_DT8_RGB = 0xEB
+OP_DT8_WAF = 0xEC
+OP_DT8_CONTROL = 0xED
+OP_DT8_FEATURES = 0xF9
+OP_DT8_VALUE = 0xFA
+OP_DT8_STATUS = 0xF8
+OP_DT8_ASSIGNED_COLOUR = 0xFC
+OP_DT8_QUERY_CONTROL = 0xFB
+RGBW_CONTROL = 0x80  # normalised colour control, all channels unlinked
+PRESERVE = None  # channel intent; distinct from every explicit HA byte, incl. 255
+
+
+def byte(value: int) -> int:
+    """Validate a protocol byte, without silently rounding or wrapping."""
+    if type(value) is not int or not 0 <= value <= 255:
+        raise ValueError(f"Expected an integer byte, got {value!r}")
+    return value
+
+
+def channel_to_dali(value: int) -> int:
+    """HA channel intensity -> real DALI channel value; never MASK."""
+    return round(byte(value) * 254 / 255)
+
+
+def channel_from_dali(value: int) -> int | None:
+    """MASK means unknown, whereas zero is a real channel value."""
+    return None if byte(value) == MASK else round(value * 255 / 254)
+
+
+def dtr(register: int, value: int) -> Frame:
+    if type(register) is not int or register not in (0, 1, 2):
+        raise ValueError("DTR register must be 0, 1 or 2")
+    return Frame([(0xA3, 0xC3, 0xC5)[register], byte(value)])
+
+
+def dt8(target: Target, opcode: int, *, read: bool = False) -> list[Frame]:
+    """Enable immediately before each DT8 operation (runtime, single-send)."""
+    return [Frame([0xC1, 8]), query(target, byte(opcode)) if read else command(target, byte(opcode))]
+
+
+def query_colour(target: Target, selector: int) -> list[Frame]:
+    """One-byte colour/control selectors only; no 16-bit DTR readback."""
+    if selector not in (*range(9, 16), *range(201, 208)):
+        raise ValueError("Not a one-byte RGBWAF selector")
+    return [dtr(0, selector), *dt8(target, OP_DT8_VALUE, read=True)]
+
+
+def rgbw_frames(target: Target, channels: tuple[int | None, int | None, int | None, int | None]) -> list[Frame]:
+    """Stage all channel intents and control, then activate; DAPC is separate.
+
+    None means preserve, encoded as MASK. Explicit 0..255 are always real levels.
+    Overwrite every temporary RGBW field, including preserved ones, so stale
+    temporary values cannot be activated accidentally. Unused A/F are MASK.
+    """
+    if len(channels) != 4:
+        raise ValueError("RGBW needs four channels")
+    red, green, blue, white = (MASK if v is PRESERVE else channel_to_dali(v) for v in channels)
+    return [
+        dtr(0, RGBW_CONTROL), *dt8(target, OP_DT8_CONTROL),
+        dtr(0, red), dtr(1, green), dtr(2, blue), *dt8(target, OP_DT8_RGB),
+        dtr(0, white), dtr(1, MASK), dtr(2, MASK), *dt8(target, OP_DT8_WAF),
+        *dt8(target, OP_DT8_ACTIVATE),
+    ]
+
+
+def rgbw_level(channels: tuple[int, int, int, int], brightness: int) -> int:
+    """Compensate normalised control's division by the largest channel.
+
+    Channel bytes are staged unchanged. Only the final arc level includes the
+    largest channel: output X * arc / max(X) = X * brightness / 254.
+    This is protocol scaling, not a photometric transfer function.
+    """
+    return round(max(channel_to_dali(v) for v in channels)
+                 * ha_brightness_to_dali(byte(brightness)) / 254)
 
 
 # ---- DALI-2 input (control device) event decoding -------------------------

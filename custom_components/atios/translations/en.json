@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Atios SmartCore (expert)",
-        "description": "This sets up direct raw-DALI access to the SmartCore. For everyday light control, most users should instead pair the SmartCore via Matter (DALI Configurator → Accessory Manager → Matter). Enter the SmartCore IP address or hostname.",
+        "description": "This sets up direct raw-DALI access to the SmartCore. For everyday light control, most users should instead pair the SmartCore via Matter (DALI Configurator \u2192 Accessory Manager \u2192 Matter). Enter the SmartCore IP address or hostname.",
         "data": {
           "host": "Host",
           "line": "DALI line"
@@ -40,11 +40,18 @@
   "issues": {
     "dali_ip_interface_disabled": {
       "title": "SmartCore DALI IP Interface is off",
-      "description": "The SmartCore at {host} has its \"DALI IP Interface\" setting turned off, so it sends no DALI bus events to Home Assistant: button, occupancy and light-level entities and the `atios_dali_event` event stay silent. Lights are not affected.\n\nTo fix it, open the SmartCore web interface, go to **System → DALI** and turn on **DALI IP Interface**. This notice clears itself as soon as the first bus event arrives."
+      "description": "The SmartCore at {host} has its \"DALI IP Interface\" setting turned off, so it sends no DALI bus events to Home Assistant: button, occupancy and light-level entities and the `atios_dali_event` event stay silent. Lights are not affected.\n\nTo fix it, open the SmartCore web interface, go to **System \u2192 DALI** and turn on **DALI IP Interface**. This notice clears itself as soon as the first bus event arrives."
     },
     "lunatone_socket_silent": {
       "title": "SmartCore does not stream DALI events",
       "description": "Home Assistant is connected to the SmartCore at {host} (firmware {version}), but the device never answers on its DALI IP websocket, so button, occupancy and light-level entities and the `atios_dali_event` event stay silent. Lights are not affected.\n\nThis is a SmartCore firmware bug: firmware built on ESP-IDF v5.5.5/v6.0.1+ (seen on 3.2.2) never registers websocket clients and drops everything it would send them. Update the SmartCore to a firmware with the fix. This notice clears itself as soon as the device starts talking."
+    }
+  },
+  "entity": {
+    "number": {
+      "white_level": {
+        "name": "White level"
+      }
     }
   }
 }

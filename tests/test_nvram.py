@@ -5,25 +5,14 @@ scene tables regenerated (all 16 slots disabled, as observed).
 """
 
 import json
-import sys
-import types
 from pathlib import Path
 
-# Register stub packages so `custom_components.atios.nvram` (and its relative
-# import of dali) loads without executing the package __init__, which needs
-# homeassistant. Same spirit as the importlib loading in test_dali.py.
-_root = Path(__file__).resolve().parent.parent
-for _name, _path in (
-    ("custom_components", _root / "custom_components"),
-    ("custom_components.atios", _root / "custom_components" / "atios"),
-):
-    if _name not in sys.modules:
-        _pkg = types.ModuleType(_name)
-        _pkg.__path__ = [str(_path)]
-        sys.modules[_name] = _pkg
+# Load pure modules in an isolated namespace without replacing HA's real
+# integration package (the real entity/service tests need that package intact).
+import pure  # noqa: F401
 
-from custom_components.atios.dali import TargetType  # noqa: E402
-from custom_components.atios.nvram import (  # noqa: E402
+from _atios_pure.dali import TargetType  # noqa: E402
+from _atios_pure.nvram import (  # noqa: E402
     INSTANCE_LIGHT,
     INSTANCE_OCCUPANCY,
     INSTANCE_PUSHBUTTON,
