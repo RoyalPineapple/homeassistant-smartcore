@@ -4,10 +4,12 @@ Install requirements-test.txt to run these. Offline runner reports an explicit
 skip if HA/aiohttp are absent; pure tests remain runnable without packages.
 """
 
+import asyncio
 import importlib.util
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,8 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import aiohttp
 from homeassistant.components import light as ha_light
 from homeassistant.components import number as ha_number
+from homeassistant.config_entries import ConfigEntries
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry, device_registry, entity_registry
 
 from custom_components.atios import _register_services
 from custom_components.atios.dali import Target, off, query_actual_level
@@ -37,9 +41,19 @@ from test_rgbw import Gateway, device
 class HAEntityTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
         self.hass = HomeAssistant(self.directory.name)
-        self.gateway = Gateway()
+        self.addAsyncCleanup(self.hass.async_stop, force=True)
+        self.hass.config_entries = ConfigEntries(self.hass, {})
+        await asyncio.gather(
+            area_registry.async_load(self.hass),
+            device_registry.async_load(self.hass),
+            entity_registry.async_load(self.hass),
+        )
+        # Use the real integration's exception class rather than the pure-test namespace.
+        self.gateway = Gateway(error_type=DaliError)
         self.hub = AtiosHub("gateway.invalid", 0, MagicMock(spec=aiohttp.ClientSession))
+        self.addAsyncCleanup(self.hub.async_stop)
         self.hub.transport = DaliTransport(self.gateway.request)
         self.hub.rgbw = RGBWController(self.hub.transport)
         self.hub.control_devices = parse_control_devices([device()])
@@ -58,13 +72,13 @@ class HAEntityTests(unittest.IsolatedAsyncioTestCase):
         self.number_component = self.hass.data[NUMBER_COMPONENT]
         await self.light_component.async_add_entities([self.light], update_before_add=True)
         await self.number_component.async_add_entities([self.number])
+        self.assertIsNotNone(self.hass.states.get(self.light.entity_id))
+        self.assertIsNotNone(self.hass.states.get(self.number.entity_id))
 
     async def asyncTearDown(self):
-        await self.light_component.async_reset()
-        await self.number_component.async_reset()
-        await self.hub.async_stop()
-        await self.hass.async_stop()
-        self.directory.cleanup()
+        for component in (self.light_component, self.number_component):
+            for entity in tuple(component.entities):
+                await component.async_remove_entity(entity.entity_id)
 
     async def light_action(self, **data):
         await self.hass.services.async_call("light", "turn_on", {
@@ -100,7 +114,10 @@ class HAEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.light.is_on)
         self.assertEqual(self.gateway.arc[5], 127)
         self.gateway.channels[5] = [0, 254, 0, 0]
-        await self.light.async_update()
+        # External changes are imported after the shared two-second cache expires.
+        with patch("custom_components.atios.rgbw.time") as clock:
+            clock.monotonic.return_value = time.monotonic() + 3
+            await self.light.async_update()
         self.assertEqual(self.number.native_value, 0)
         self.assertEqual(self.light.rgbw_color, (0, 255, 0, 0))
         self.assertFalse(self.light.assumed_state)

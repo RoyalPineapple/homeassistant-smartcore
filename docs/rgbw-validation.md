@@ -2,25 +2,32 @@
 
 ## Executed checks
 
-Python executable:
+Verified environment:
 
 ```text
-/Users/alex/.local/share/uv/python/cpython-3.13.18-macos-aarch64-none/bin/python3.13
+Python 3.13.18
+Home Assistant 2025.11.3
+pytest 8.4.2
+aiohttp 3.13.2
+pycares 4.11.0
 ```
 
 Commands (from the repository root):
 
 ```bash
-/Users/alex/.local/share/uv/python/cpython-3.13.18-macos-aarch64-none/bin/python3.13 tests/run_offline.py
-/Users/alex/.local/share/uv/python/cpython-3.13.18-macos-aarch64-none/bin/python3.13 -m compileall -q custom_components tests
+.venv/bin/python -m pytest tests/test_ha.py -q --tb=short
+.venv/bin/python -m pytest tests/ -q --tb=short
+.venv/bin/python -m compileall -q custom_components tests
 git diff --check
 ```
 
-Results: **50 tests passed, one module skipped** (51 unittest results total).
-Compilation and whitespace checks passed. The runner executes the existing
-14 function tests unchanged, plus 36 new tests. Golden expected bytes are literal
-independent reference data. The simulated gateway is a software peer, not a
-hardware trace or firmware emulator.
+Results: **11 HA/HTTP tests passed; the complete suite passed all 61 tests, with
+no skips.** Compilation and whitespace checks also passed. The complete suite
+contains the existing 14 function tests, 36 protocol/controller/transport tests,
+and 11 real HA/HTTP adapter tests. Both pytest runs reported one upstream
+DeprecationWarning from HA's HTTP application subclassing aiohttp's application.
+Golden expected bytes are literal independent reference data. The simulated
+gateway is a software peer, not a hardware trace or firmware emulator.
 
 Covered contracts include addressing and DT8 enable/order; explicit zero/full
 versus preservation MASK; brightness scaling; RGB/W preservation; unknown and
@@ -36,7 +43,7 @@ and slider values merged across off. Those regressions now pass. Additional
 tests verify the bounded power-command queue and cancellation of queued power
 commands and edits during unload.
 
-## Checks not executed
+## Home Assistant integration checks
 
 `tests/test_ha.py` contains **eleven real Home Assistant/aiohttp adapter tests**:
 entity identities and slider actions, actual HA RGB/HS/XY conversion, shared
@@ -44,21 +51,24 @@ state, restoration, legacy dimming/scenes/raw services, action failure, JSON
 payload/body validation, HTTP/timeout/malformed replies and unload closure.
 Two regressions also exercise explicit RGBW replacement of pending white and a
 real number service action on a group whose members have different W values.
-The module was explicitly skipped because Home Assistant is not installed.
-These tests have been added but have not passed an execution check here.
+All eleven tests now execute and pass against the installed HA package. HA runs
+in-process with a temporary configuration and real registries, entities and
+service processing; the gateway and HTTP responses are simulated.
 
-The intended environment is Python 3.13 and `requirements-test.txt` (HA
-2025.11.3). Installation was attempted with:
+The first real run exposed test-harness defects: registries and the config-entry
+manager were not initialized, teardown used a removed method, the external-change
+test did not allow the documented polling cache to expire, and the shared fake
+gateway raised the pure-test namespace's exception instead of the integration's
+real exception type. The harness now initializes HA's native registries, uses
+public entity removal and proper shutdown, advances only the controller's test
+clock, and supplies the correct simulated failure type. No production integration
+code changes were needed for these harness corrections.
 
-```bash
-/Users/alex/.local/share/uv/python/cpython-3.13.18-macos-aarch64-none/bin/python3.13 -m pip install --target /tmp/atios-test-deps --index-url https://pypi.org/simple --no-cache-dir --retries 0 --timeout 5 pytest aiohttp homeassistant==2025.11.3 -v
-```
-
-It failed. A further isolated verbose pip attempt confirmed the cause:
-`pypi.org` could not be resolved. Pip itself is installed and operational. The
-full pytest/HA suite is therefore an explicit remaining local verification
-blocker, not a hardware dependency. Run the documented venv/pytest commands in
-CONTRIBUTING.md when dependency installation is available.
+Dependency installation initially could not run inside the task because PyPI
+DNS resolution was blocked. The dependencies were subsequently installed from
+the user's terminal. `requirements-test.txt` now constrains pycares to 4.x: HA's
+pinned aiodns 3.5.0 cannot import with pycares 5.x. The verified environment above
+includes that compatibility constraint. Follow CONTRIBUTING.md to reproduce it.
 
 No tests used private addresses, SSH, live device requests or a deployed HA.
 No deployment, restart, pairing change, firmware update, DALI command, group

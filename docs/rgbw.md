@@ -163,8 +163,10 @@ retry and no rollback of already-applied members or frames.
 
 No SmartCore firmware or Lunatone driver has been hardware-validated for this
 new path. Historical firmware observations are not RGBW compatibility claims.
-The Home Assistant API baseline for the integration tests is 2025.11.3 / Python
-3.13; API source was inspected, but execution requires the real package.
+The Home Assistant API baseline is 2025.11.3 / Python 3.13. All eleven HA/HTTP
+adapter tests have passed against that real package, including HA's RGB/HS/XY
+service conversion and mixed-white group number actions. This does not establish
+compatibility with untested HA releases or physical hardware.
 
 Protocol constants and golden frames were independently checked using
 [python-dali colour definitions at b1881c008aca0b269fd09b8834dd9bdc0f1a735b](https://github.com/sde1000/python-dali/blob/b1881c008aca0b269fd09b8834dd9bdc0f1a735b/dali/gear/colour.py)

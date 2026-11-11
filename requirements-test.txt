@@ -1,3 +1,5 @@
 # Known stable HA API baseline, Python 3.13. No new integration runtime dependency.
 homeassistant==2025.11.3
+# HA pins aiodns 3.5.0, whose resolver API is incompatible with pycares 5.x.
+pycares>=4.9,<5
 pytest>=8.3,<9

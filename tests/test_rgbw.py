@@ -97,7 +97,8 @@ class CapabilityTests(unittest.TestCase):
 class Gateway:
     """A small simulated protocol peer, not an alternative encoder or HA fake."""
 
-    def __init__(self):
+    def __init__(self, *, error_type=DaliError):
+        self._error_type = error_type
         self.frames = []
         self.registers = [0, 0, 0]
         self.channels = {5: [254, 0, 64, 127], 6: [0, 254, 0, 64]}
@@ -114,7 +115,7 @@ class Gateway:
     async def request(self, frame):
         self.frames.append(list(frame.data))
         if len(self.frames) == self.fail_at:
-            raise DaliError('bus_busy')
+            raise self._error_type('bus_busy')
         first, second = frame.data
         if first in (0xA3, 0xC3, 0xC5):
             self.registers[(0xA3, 0xC3, 0xC5).index(first)] = second
