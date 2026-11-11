@@ -36,7 +36,6 @@ class AtiosWhiteLevel(NumberEntity):
     _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
     _attr_icon = "mdi:lightbulb-on-outline"
-    _attr_translation_key = "white_level"
 
     def __init__(self, hub, entry, target, name=None) -> None:
         self._controller = hub.rgbw

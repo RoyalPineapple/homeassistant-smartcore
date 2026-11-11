@@ -157,6 +157,7 @@ class AtiosHub:
         self._stream_cbs: list[Callable[[bool], None]] = []
         self._info: dict = {}
         self.control_devices: list = []  # nvram.ControlDevice, set at setup
+        self.control_inventory_complete = False
         self.input_devices: list = []  # nvram.InputDevice, set at setup
         self.rgbw_targets: dict = {}  # target -> shared RGBW control/state owner
         self.rgbw = None  # populated before platforms are forwarded
@@ -253,6 +254,8 @@ class AtiosHub:
         fall back.
         """
         devices: list[dict] = []
+        if section == "control_devices":
+            self.control_inventory_complete = False
         offset = 0
         for _ in range(32):  # 32 * 4 = 128 > max 64 addresses + groups
             url = (
@@ -269,16 +272,16 @@ class AtiosHub:
                 _LOGGER.debug(
                     "Atios %s: nvm fetch %s failed: %s", self._host, section, err
                 )
-                return None
+                return None if not devices else devices
             if not isinstance(body, dict) or not body.get("success"):
-                return None
+                return None if not devices else devices
             devices.extend((body.get("data") or {}).get(section) or [])
             pagination = body.get("pagination") or {}
             if not pagination.get("has_more"):
+                if section == "control_devices":
+                    self.control_inventory_complete = True
                 break
             offset += pagination.get("limit", 4)
-        else:
-            return None  # never promote a truncated inventory to RGBW groups
         return devices
 
     async def async_trigger_ota(self) -> bool:
@@ -434,10 +437,6 @@ class AtiosHub:
         finally:
             if self.rgbw is not None and not frame.wait_for_answer:
                 self.rgbw.invalidate()
-
-    async def send_sequence(self, frames: list[Frame]) -> list[list[int] | None]:
-        """Run ordered frames, stopping at the first failure."""
-        return await self.transport.send_sequence(frames)
 
     async def _request_frame(self, frame: Frame) -> list[int] | None:
         """One HTTP exchange, called only while the transport lock is held."""

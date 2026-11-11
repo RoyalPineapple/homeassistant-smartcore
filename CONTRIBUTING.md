@@ -35,16 +35,5 @@ are kept here as the verification procedure.
 ## Tests
 
 ```bash
-python3.13 -m venv .venv
-.venv/bin/python -m pip install -r requirements-test.txt
-.venv/bin/python -m pytest tests/
+python3 -m pytest tests/
 ```
-
-Without downloaded packages, run the pure protocol/controller/transport suite
-and existing tests using `python3.13 tests/run_offline.py`. Real HA entity/service
-and HTTP-adapter tests explicitly skip if Home Assistant is absent; this is not
-equivalent to a fully passing integration suite. Python 3.12+ is needed for the
-integration's `type` alias; the pinned HA test baseline uses Python 3.13.
-
-New DT8 work must follow [RGBW software contracts](docs/rgbw.md). Physical testing
-is separate: [deferred checklist](docs/rgbw-hardware-checklist.md).

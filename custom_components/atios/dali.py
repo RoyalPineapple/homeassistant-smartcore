@@ -46,7 +46,8 @@ MASK = 0xFF
 BROADCAST_DAPC = 0xFE
 BROADCAST_CMD = 0xFF
 
-# DALI level range. 0 = off, 254 = max, 255 = "mask"/no change (never send as a level).
+# Brightness levels: 0 = off, 254 = max. 255 is valid DALI MASK, not brightness.
+# DAPC MASK stops fading at the current level; DT8 channel MASK preserves it.
 DALI_MIN = 0
 DALI_MAX = 254
 
@@ -72,13 +73,13 @@ class Target:
 
     @classmethod
     def short(cls, address: int) -> "Target":
-        if type(address) is not int or not 0 <= address <= 63:
+        if not 0 <= address <= 63:
             raise ValueError(f"short address out of range: {address}")
         return cls(TargetType.SHORT, address)
 
     @classmethod
     def group(cls, group: int) -> "Target":
-        if type(group) is not int or not 0 <= group <= 15:
+        if not 0 <= group <= 15:
             raise ValueError(f"group out of range: {group}")
         return cls(TargetType.GROUP, group)
 
@@ -113,10 +114,8 @@ class Frame:
     priority: int = 3
 
     def __post_init__(self) -> None:
-        if self.bits not in (16, 24, 25) or len(self.data) != (self.bits + 7) // 8:
-            raise ValueError("Frame length does not match 16/24/25-bit encoding")
         for b in self.data:
-            if type(b) is not int or not 0 <= b <= MASK:
+            if not 0 <= b <= MASK:
                 raise ValueError(f"frame byte out of range: {b}")
 
 

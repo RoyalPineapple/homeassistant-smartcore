@@ -73,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: AtiosConfigEntry) -> boo
     hub.rgbw = RGBWController(hub.transport)
     await hub.rgbw.discover(
         hub.control_devices,
-        complete=raw_control is not None and not any(d.get("collision") for d in raw_control),
+        complete=hub.control_inventory_complete and not any(d.get("collision") for d in raw_control or ()),
     )
     hub.rgbw_targets = hub.rgbw.members
 

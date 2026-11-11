@@ -5,19 +5,31 @@ scene tables regenerated (all 16 slots disabled, as observed).
 """
 
 import json
+import sys
+import types
 from pathlib import Path
 
-# Load pure modules in an isolated namespace without replacing HA's real
-# integration package (the real entity/service tests need that package intact).
-import pure  # noqa: F401
+# Register stub packages so `custom_components.atios.nvram` (and its relative
+# import of dali) loads without executing the package __init__, which needs
+# homeassistant. Same spirit as the importlib loading in test_dali.py.
+_root = Path(__file__).resolve().parent.parent
+for _name, _path in (
+    ("custom_components", _root / "custom_components"),
+    ("custom_components.atios", _root / "custom_components" / "atios"),
+):
+    if _name not in sys.modules:
+        _pkg = types.ModuleType(_name)
+        _pkg.__path__ = [str(_path)]
+        sys.modules[_name] = _pkg
 
-from _atios_pure.dali import TargetType  # noqa: E402
-from _atios_pure.nvram import (  # noqa: E402
+from custom_components.atios.dali import Target, TargetType  # noqa: E402
+from custom_components.atios.nvram import (  # noqa: E402
     INSTANCE_LIGHT,
     INSTANCE_OCCUPANCY,
     INSTANCE_PUSHBUTTON,
     parse_control_devices,
     parse_input_devices,
+    rgbw_group_members,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -58,6 +70,25 @@ def test_short_address_passthrough():
     assert short0.target.type is TargetType.SHORT
     assert short0.device_types == (6, 8)
     assert short0.gear_groups == (1,)
+    assert short0.color_type_features == 109
+    assert short0.dt8_candidate
+
+
+def test_rgbw_groups_require_complete_verified_members():
+    devices = control_devices()
+    verified = {Target.short(0), Target.short(1)}
+    assert rgbw_group_members(devices, verified, complete=True) == {
+        Target.group(1): (Target.short(0), Target.short(1))
+    }
+    assert rgbw_group_members(devices, verified, complete=False) == {}
+    assert rgbw_group_members(devices, {Target.short(0)}, complete=True) == {}
+
+
+def test_selected_dt6_is_not_a_dt8_candidate():
+    devices = parse_control_devices([
+        {"address": 0, "device_types": [6, 8], "device_type_selected": 6}
+    ])
+    assert not devices[0].dt8_candidate
 
 
 def test_input_devices_parsed():

@@ -71,12 +71,6 @@ class RGBWState:
     requested: RGBWSettings | None = None
     last_usable: RGBWSettings | None = None
 
-    @property
-    def confirmation(self) -> str:
-        if not self.available or self.rgbw is None:
-            return "unknown"
-        return "assumed" if self.assumed else "confirmed"
-
 
 class RGBWController:
     """One owner for all RGBW lights and white numbers on one SmartCore."""
@@ -153,10 +147,6 @@ class RGBWController:
                     future.set_result(None)
         finally:
             self._workers.pop(target, None)
-
-    async def _flush(self, target: Target) -> None:
-        while task := self._workers.get(target):
-            await asyncio.shield(task)
 
     def subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(listener)

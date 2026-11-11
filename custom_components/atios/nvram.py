@@ -60,12 +60,6 @@ class ControlDevice:
         return (self.device_type_selected in (0, 8)
                 and (8 in self.device_types or self.device_type_selected == 8))
 
-    @property
-    def rgbw_channels(self) -> int:
-        """Part 209 bits 5..7 are a count, not a boolean RGBW flag."""
-        value = self.color_type_features
-        return (value >> 5) & 7 if type(value) is int and 0 <= value < 255 else 0
-
 
 @dataclass(frozen=True)
 class InputInstance:
@@ -103,12 +97,10 @@ def parse_control_devices(devices: list[dict]) -> list[ControlDevice]:
     """Parse the ``control_devices`` list; skips collision pseudo-entries."""
     out: list[ControlDevice] = []
     for d in devices:
-        if not isinstance(d, dict):
-            continue
         if d.get("collision"):
             continue
         addr = d.get("address")
-        if type(addr) is not int:
+        if addr is None:
             continue
         is_group = bool(d.get("is_group"))
         number = addr - GROUP_ADDRESS_BASE if is_group else addr
@@ -121,11 +113,8 @@ def parse_control_devices(devices: list[dict]) -> list[ControlDevice]:
                 name=d.get("name") or ("Group" if is_group else "Light") + f" {number}",
                 is_group=is_group,
                 number=number,
-                gear_groups=tuple(g for g in (d.get("gear_groups") or ())
-                                  if type(g) is int and 0 <= g <= 15)
-                if isinstance(d.get("gear_groups"), (list, tuple)) else (),
-                device_types=tuple(t for t in (d.get("device_types") or ()) if type(t) is int)
-                if isinstance(d.get("device_types"), (list, tuple)) else (),
+                gear_groups=tuple(d.get("gear_groups") or ()),
+                device_types=tuple(d.get("device_types") or ()),
                 device_type_selected=d.get("device_type_selected", 0),
                 min_level=d.get("min_level", 1),
                 max_level=d.get("max_level", 254),

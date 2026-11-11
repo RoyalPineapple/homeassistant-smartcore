@@ -27,7 +27,7 @@ from a stale inventory; confirm membership during hardware validation.
 Existing light unique IDs are unchanged. Numbers append `_white_level` to the
 same target identity. RGB and RGBW are accepted HA input modes; the full reported
 colour mode is RGBW. Accepting RGB directly prevents HA's HS/XY conversion from
-inventing or replacing W. The HA tests exercise RGB, HS and XY service inputs.
+inventing or replacing W.
 
 ## Command contract
 
@@ -162,11 +162,10 @@ retry and no rollback of already-applied members or frames.
 ## Compatibility, references and verification
 
 No SmartCore firmware or Lunatone driver has been hardware-validated for this
-new path. Historical firmware observations are not RGBW compatibility claims.
-The Home Assistant API baseline is 2025.11.3 / Python 3.13. All eleven HA/HTTP
-adapter tests have passed against that real package, including HA's RGB/HS/XY
-service conversion and mixed-white group number actions. This does not establish
-compatibility with untested HA releases or physical hardware.
+new path. Local checks cover encoding and capability selection in the existing
+test suite. Entity actions were also checked against Home Assistant 2025.11.3 /
+Python 3.13 before removing the temporary test harness. These checks do not
+establish physical behaviour or compatibility with other firmware/HA releases.
 
 Protocol constants and golden frames were independently checked using
 [python-dali colour definitions at b1881c008aca0b269fd09b8834dd9bdc0f1a735b](https://github.com/sde1000/python-dali/blob/b1881c008aca0b269fd09b8834dd9bdc0f1a735b/dali/gear/colour.py)
@@ -185,8 +184,7 @@ Other references:
 * [HA 2025.11.3 light action conversion](https://github.com/home-assistant/core/blob/2025.11.3/homeassistant/components/light/__init__.py)
 * [Atios DALI interface settings](https://docs.atios.ch/smartcore/settings/system)
 
-See [validation results](rgbw-validation.md) for exact executed commands and
-[on-site checklist](rgbw-hardware-checklist.md) for deferred physical tests.
+See the [on-site checklist](rgbw-hardware-checklist.md) for deferred physical tests.
 
 ## Revert or remove
 

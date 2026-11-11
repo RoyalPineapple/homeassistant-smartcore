@@ -104,8 +104,7 @@ separate **White level** slider. RGB edits preserve W; white edits preserve RGB;
 brightness is independent. Both entities share one controller and driver reports.
 DT6, tunable-white-only, unknown and mixed targets stay brightness-only.
 
-See [RGBW semantics, limitations and removal](docs/rgbw.md),
-[local validation](docs/rgbw-validation.md), and the
+See [RGBW semantics, limitations and removal](docs/rgbw.md) and the
 [deferred hardware checklist](docs/rgbw-hardware-checklist.md).
 
 ## Contributing
