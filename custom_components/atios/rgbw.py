@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
@@ -85,7 +86,7 @@ class RGBWController:
         self.states: dict[Target, RGBWState] = {}
         self.members: dict[Target, tuple[Target, ...]] = {}
         self._listeners: list[Callable[[], None]] = []
-        self._pending: dict[Target, tuple[dict, asyncio.Future]] = {}
+        self._pending: dict[Target, deque[tuple[dict, asyncio.Future, bool]]] = {}
         self._workers: dict[Target, asyncio.Task] = {}
         self._closed = False
 
@@ -96,27 +97,35 @@ class RGBWController:
         for task in workers:
             task.cancel()
         await asyncio.gather(*workers, return_exceptions=True)
-        for _, future in self._pending.values():
-            future.cancel()
+        self._workers.clear()
+        for queue in self._pending.values():
+            for _, future, _ in queue:
+                future.cancel()
         self._pending.clear()
 
-    async def _submit(self, target: Target, **patch) -> None:
-        """One active transaction plus one latest pending patch per target.
+    async def _submit(self, target: Target, *, barrier: bool = False, **patch) -> None:
+        """Coalesce slider edits, without crossing an ordered power command.
 
-        Waiters share a Future; there is no growing list of queued commands or
-        callbacks. Cancelling one HA service call cannot cancel its peers or
-        abandon an accepted sequence halfway through staging.
+        Each target admits at most eight pending entries. Consecutive slider
+        edits share one patch and Future. On/off entries are barriers: later
+        edits cannot overtake them or merge with edits that came before them.
+        Cancelling a caller never abandons an accepted sequence halfway through.
         """
         if self._closed:
             raise DaliError("closed")
         if target not in self.members:
             raise ValueError("Target was not verified for RGBW")
-        if target not in self._pending:
+        queue = self._pending.setdefault(target, deque())
+        if queue and not barrier and not queue[-1][2]:
+            pending, future, _ = queue[-1]
+        else:
+            if len(queue) >= 8:
+                raise DaliError("queue_full")
             future = asyncio.get_running_loop().create_future()
             # A caller may cancel after acceptance; still retrieve failures.
             future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-            self._pending[target] = ({}, future)
-        pending, future = self._pending[target]
+            pending = {}
+            queue.append((pending, future, barrier))
         if patch.get("rgbw") is not None:
             pending.pop("rgb", None)
             pending.pop("white", None)
@@ -129,8 +138,10 @@ class RGBWController:
 
     async def _run_pending(self, target: Target) -> None:
         try:
-            while target in self._pending:
-                patch, future = self._pending.pop(target)
+            while queue := self._pending.get(target):
+                patch, future, _ = queue.popleft()
+                if not queue:
+                    del self._pending[target]
                 try:
                     await self._change(target, **patch)
                 except asyncio.CancelledError:
@@ -320,8 +331,7 @@ class RGBWController:
         if rgbw is not None and rgb is not None:
             raise ValueError("Specify RGB or RGBW, not both")
         if brightness is None and rgbw is None and rgb is None:
-            await self._flush(target)
-            await self._change(target, turn_on=True)
+            await self._submit(target, barrier=True, turn_on=True)
         else:
             patch = {key: value for key, value in dict(brightness=brightness, rgbw=rgbw, rgb=rgb).items() if value is not None}
             await self._submit(target, **patch, turn_on=True)
@@ -330,8 +340,7 @@ class RGBWController:
         await self._submit(target, white=byte(value))
 
     async def turn_off(self, target: Target) -> None:
-        await self._flush(target)
-        await self._change(target, turn_off=True)
+        await self._submit(target, barrier=True, turn_off=True)
 
     async def _change(
         self, target: Target, *, brightness=None, rgbw=None, rgb=None,
@@ -376,7 +385,7 @@ class RGBWController:
                     if rgb is not None:
                         mix = (*rgb, mix[3])
                         intents[:3] = rgb
-                    if state.pending_white is not None and turn_on:
+                    if state.pending_white is not None and turn_on and rgbw is None:
                         intents[3] = state.pending_white
                     if white is not None:
                         mix = (*mix[:3], white)

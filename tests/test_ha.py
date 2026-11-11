@@ -105,6 +105,32 @@ class HAEntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.light.rgbw_color, (0, 255, 0, 0))
         self.assertFalse(self.light.assumed_state)
 
+    async def test_explicit_rgbw_action_replaces_pending_white(self):
+        await self.light.async_turn_off()
+        await self.number.async_set_native_value(220)
+        await self.light_action(rgbw_color=[255, 0, 0, 0], brightness=255)
+        self.assertEqual(self.gateway.channels[5], [254, 0, 0, 0])
+        self.assertEqual(self.light.rgbw_color, (255, 0, 0, 0))
+        self.assertEqual(self.number.native_value, 0)
+
+    async def test_mixed_white_group_accepts_real_ha_number_action(self):
+        controller = self.hub.rgbw
+        group = Target.group(0)
+        await controller.discover(parse_control_devices([
+            dict(address=128, is_group=True), device(), device(6),
+        ]), complete=True)
+        await controller.poll(group, force=True)
+        number = AtiosWhiteLevel(self.hub, self.entry, group, "Group spots")
+        await self.number_component.async_add_entities([number])
+        self.assertIsNone(number.native_value)
+        self.assertTrue(number.available)
+        await self.hass.services.async_call("number", "set_value", {
+            "entity_id": number.entity_id, "value": 200,
+        }, blocking=True)
+        self.assertEqual(number.native_value, 200)
+        self.assertEqual(self.gateway.channels[5], [254, 0, 64, 199])
+        self.assertEqual(self.gateway.channels[6], [0, 254, 0, 199])
+
     async def test_legacy_brightness_scene_and_raw_services(self):
         legacy = AtiosLight(self.hub, self.entry, Target.short(6))
         legacy.async_write_ha_state = MagicMock()

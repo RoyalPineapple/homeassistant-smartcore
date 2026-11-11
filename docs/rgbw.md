@@ -119,7 +119,9 @@ The driver's original HA decomposition is not uniquely recoverable:
   tuple and brightness to establish it explicitly. Nothing guesses lost intent.
 
 Group values are common only when members agree; group on means any member on.
-W can agree even when RGB differs. Group state stays assumed. Short/group polls
+W can agree even when RGB differs. Different member W values produce an unknown
+number value, not an unavailable entity, so the group can still be set to a new
+common W. Group state stays assumed. Short/group polls
 share the physical refresh path and reuse a complete confirmed report for up to
 two seconds; commands always read freshly. The number has no separate poll loop.
 
@@ -139,11 +141,13 @@ MASK, null, rejected execution, busy, collision, malformed replies, HTTP errors,
 timeouts and cancellation stay distinct. This strict reply contract must still
 be checked against the installed firmware's no-answer and write responses.
 
-Slider commands have one active sequence and one coalesced pending patch per
-target. Later values replace pending values; independent RGB, W and brightness
-edits merge. A complete tuple supersedes earlier pending component edits. On/off
-wait for that target's accepted edits. General transport admission is bounded to
-eight transactions and fails explicitly when full; there is no unlimited queue.
+Consecutive pending slider commands coalesce per target. Later values replace
+pending values; independent RGB, W and brightness edits merge. A complete tuple
+supersedes earlier pending component edits and any saved off-state W. Power
+commands occupy ordered queue positions; slider edits cannot merge across them.
+Each target admits at most eight pending entries, in addition to its active
+sequence. General transport admission is also bounded to eight transactions;
+both limits fail explicitly when full rather than building an unlimited queue.
 Cancelled UI waiters do not interrupt accepted commands. Unload cancels owned
 workers, waits for an in-flight request to finish, aborts remaining frames, removes
 entity listeners, drains the transport, and rejects subsequent work.

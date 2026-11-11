@@ -56,8 +56,7 @@ class AtiosWhiteLevel(NumberEntity):
 
     @property
     def available(self) -> bool:
-        return (self._controller.state(self._target).available
-                and self._controller.white_level(self._target) is not None)
+        return self._controller.state(self._target).available
 
     @property
     def assumed_state(self) -> bool:

@@ -16,9 +16,9 @@ Commands (from the repository root):
 git diff --check
 ```
 
-Results: **45 tests passed, one module skipped** (46 unittest results total).
+Results: **50 tests passed, one module skipped** (51 unittest results total).
 Compilation and whitespace checks passed. The runner executes the existing
-14 function tests unchanged, plus 31 new tests. Golden expected bytes are literal
+14 function tests unchanged, plus 36 new tests. Golden expected bytes are literal
 independent reference data. The simulated gateway is a software peer, not a
 hardware trace or firmware emulator.
 
@@ -30,12 +30,20 @@ collision, malformed results; serialization; no ACTIVATE after staging failure;
 bounded admission; slider coalescing; cancellation and unload lock release.
 The existing button-event decoding and input-device parser tests also passed.
 
+Review regressions were reproduced before the fixes: an explicit W=0 or W=255
+was overridden by saved off-state W, later on commands overtook a waiting off,
+and slider values merged across off. Those regressions now pass. Additional
+tests verify the bounded power-command queue and cancellation of queued power
+commands and edits during unload.
+
 ## Checks not executed
 
-`tests/test_ha.py` contains **nine real Home Assistant/aiohttp adapter tests**:
+`tests/test_ha.py` contains **eleven real Home Assistant/aiohttp adapter tests**:
 entity identities and slider actions, actual HA RGB/HS/XY conversion, shared
 state, restoration, legacy dimming/scenes/raw services, action failure, JSON
 payload/body validation, HTTP/timeout/malformed replies and unload closure.
+Two regressions also exercise explicit RGBW replacement of pending white and a
+real number service action on a group whose members have different W values.
 The module was explicitly skipped because Home Assistant is not installed.
 These tests have been added but have not passed an execution check here.
 

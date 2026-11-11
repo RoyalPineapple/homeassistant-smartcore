@@ -213,6 +213,18 @@ class StateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.gateway.channels[5], [254, 0, 64, 219])
         self.assertEqual(self.gateway.arc[5], 127)
 
+    async def test_explicit_rgbw_white_overrides_off_state_pending_white(self):
+        for white, expected in ((0, 0), (255, 254)):
+            with self.subTest(white=white):
+                await self.controller.turn_off(T)
+                await self.controller.set_white(T, 220)
+                await self.controller.turn_on(T, rgbw=(255, 0, 0, white), brightness=255)
+                self.assertEqual(self.gateway.channels[5], [254, 0, 0, expected])
+                self.assertEqual(self.controller.state(T).rgbw, (255, 0, 0, white))
+                self.assertIsNone(self.controller.state(T).pending_white)
+                await self.controller.poll(T, force=True)
+                self.assertEqual(self.controller.state(T).rgbw, (255, 0, 0, white))
+
     async def test_external_change_and_readback_zero_mask_missing(self):
         await self.controller.poll(T)
         self.assertFalse(self.controller.state(T).assumed)
@@ -347,6 +359,109 @@ class StateTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(active, *sliders, rgb)
         self.assertEqual(self.gateway.channels[5], [0, 254, 64, 254])
         self.assertEqual(self.gateway.frames.count([11, 0xE2]), 2)
+        self.assertEqual(self.controller._pending, {})
+
+    async def test_power_commands_keep_order_during_slider_transaction(self):
+        staging, release = asyncio.Event(), asyncio.Event()
+        original = self.gateway.request
+        first = True
+        async def request(frame):
+            nonlocal first
+            if frame.data == [0xA3, 0x80] and first:
+                first = False
+                staging.set()
+                await release.wait()
+            return await original(frame)
+        self.transport._request = request
+        active = asyncio.create_task(self.controller.set_white(T, 10))
+        await staging.wait()
+        off = asyncio.create_task(self.controller.turn_off(T))
+        await asyncio.sleep(0)
+        on = asyncio.create_task(self.controller.turn_on(T, brightness=255))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(active, off, on)
+        self.assertGreater(self.gateway.arc[5], 0)
+        self.assertTrue(self.controller.state(T).is_on)
+        off_index = self.gateway.frames.index([11, 0])
+        self.assertIn([11, 0xE2], self.gateway.frames[off_index + 1:])
+
+    async def test_white_edits_do_not_coalesce_across_off(self):
+        staging, release = asyncio.Event(), asyncio.Event()
+        original = self.gateway.request
+        first = True
+        async def request(frame):
+            nonlocal first
+            if frame.data == [0xA3, 0x80] and first:
+                first = False
+                staging.set()
+                await release.wait()
+            return await original(frame)
+        self.transport._request = request
+        active = asyncio.create_task(self.controller.set_white(T, 10))
+        await staging.wait()
+        before_off = asyncio.create_task(self.controller.set_white(T, 100))
+        await asyncio.sleep(0)
+        off = asyncio.create_task(self.controller.turn_off(T))
+        await asyncio.sleep(0)
+        after_off = asyncio.create_task(self.controller.set_white(T, 200))
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(active, before_off, off, after_off)
+        self.assertEqual(self.gateway.channels[5][3], 100)
+        self.assertEqual(self.gateway.arc[5], 0)
+        self.assertEqual(self.controller.state(T).pending_white, 200)
+        self.assertEqual(self.controller.white_level(T), 200)
+        off_index = self.gateway.frames.index([11, 0])
+        self.assertNotIn([11, 0xE2], self.gateway.frames[off_index + 1:])
+
+    async def test_pending_power_commands_are_bounded(self):
+        staging, release = asyncio.Event(), asyncio.Event()
+        original = self.gateway.request
+        async def request(frame):
+            if frame.data == [0xA3, 0x80]:
+                staging.set()
+                await release.wait()
+            return await original(frame)
+        self.transport._request = request
+        active = asyncio.create_task(self.controller.set_white(T, 10))
+        await staging.wait()
+        queued = [asyncio.create_task(self.controller.turn_off(T)) for _ in range(8)]
+        await asyncio.sleep(0)
+        with self.assertRaises(DaliError) as raised:
+            await self.controller.turn_off(T)
+        self.assertEqual(raised.exception.reason, 'queue_full')
+        release.set()
+        await asyncio.gather(active, *queued)
+        self.assertEqual(self.gateway.frames.count([11, 0]), 8)
+        self.assertFalse(self.controller.state(T).is_on)
+        self.assertEqual(self.controller._pending, {})
+
+    async def test_unload_cancels_queued_power_commands_and_edits(self):
+        staging, release = asyncio.Event(), asyncio.Event()
+        original = self.gateway.request
+        async def request(frame):
+            if frame.data == [0xA3, 0x80]:
+                staging.set()
+                await release.wait()
+            return await original(frame)
+        self.transport._request = request
+        active = asyncio.create_task(self.controller.set_white(T, 10))
+        await staging.wait()
+        queued = [asyncio.create_task(action) for action in (
+            self.controller.turn_off(T), self.controller.turn_on(T),
+            self.controller.set_white(T, 200),
+        )]
+        await asyncio.sleep(0)
+        closing = asyncio.create_task(self.controller.close())
+        await asyncio.sleep(0)
+        release.set()
+        await closing
+        results = await asyncio.gather(active, *queued, return_exceptions=True)
+        self.assertTrue(all(isinstance(result, asyncio.CancelledError) for result in results))
+        self.assertNotIn([11, 0xE2], self.gateway.frames)
+        self.assertNotIn([11, 0], self.gateway.frames)
+        self.assertEqual(self.controller._workers, {})
         self.assertEqual(self.controller._pending, {})
 
     async def test_full_tuple_replaces_pending_white_and_later_white_wins(self):
