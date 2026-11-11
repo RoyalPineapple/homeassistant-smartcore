@@ -162,8 +162,12 @@ retry and no rollback of already-applied members or frames.
 ## Compatibility, references and verification
 
 No SmartCore firmware or Lunatone driver has been hardware-validated for this
-new path. Local checks cover encoding and capability selection in the existing
-test suite. Entity actions were also checked against Home Assistant 2025.11.3 /
+new path. Local tests cover encoding, capability selection, failure at every
+colour frame, transaction ordering, cancellation, unload, slider coalescing and
+state/readback contracts using standard mocks and scripted replies. The saved
+fixtures contain NVRAM data, not raw DALI-interface responses; the documented
+successful-query shape is tested, while write/no-answer firmware compatibility
+remains unverified. Entity actions were also checked against Home Assistant 2025.11.3 /
 Python 3.13 before removing the temporary test harness. These checks do not
 establish physical behaviour or compatibility with other firmware/HA releases.
 
