@@ -6,10 +6,12 @@ No HA or HTTP dependency: the hub supplies the actual request coroutine.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 
 from .dali import Frame
+
+FrameSender = Callable[[Frame], Awaitable[list[int] | None]]
 
 
 class DaliError(Exception):
@@ -60,7 +62,7 @@ class DaliTransport:
     No retry: a partially applied transaction cannot safely be replayed.
     """
 
-    def __init__(self, request: Callable[[Frame], Awaitable[list[int] | None]]) -> None:
+    def __init__(self, request: FrameSender) -> None:
         self._request = request
         self._lock = asyncio.Lock()
         self._pending = 0
@@ -72,7 +74,7 @@ class DaliTransport:
             pass  # drain the current bounded request before unloading
 
     @asynccontextmanager
-    async def transaction(self):
+    async def transaction(self) -> AsyncIterator[FrameSender]:
         if self._closed:
             raise DaliError("closed")
         if self._pending >= 8:

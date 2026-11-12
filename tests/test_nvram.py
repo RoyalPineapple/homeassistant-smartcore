@@ -9,21 +9,15 @@ import sys
 import types
 from pathlib import Path
 
-# Register stub packages so `custom_components.atios.nvram` (and its relative
-# import of dali) loads without executing the package __init__, which needs
-# homeassistant. Same spirit as the importlib loading in test_dali.py.
+# Load pure modules under a separate name so real HA entity tests can coexist.
 _root = Path(__file__).resolve().parent.parent
-for _name, _path in (
-    ("custom_components", _root / "custom_components"),
-    ("custom_components.atios", _root / "custom_components" / "atios"),
-):
-    if _name not in sys.modules:
-        _pkg = types.ModuleType(_name)
-        _pkg.__path__ = [str(_path)]
-        sys.modules[_name] = _pkg
+if "atios_test" not in sys.modules:
+    _pkg = types.ModuleType("atios_test")
+    _pkg.__path__ = [str(_root / "custom_components" / "atios")]
+    sys.modules["atios_test"] = _pkg
 
-from custom_components.atios.dali import Target, TargetType  # noqa: E402
-from custom_components.atios.nvram import (  # noqa: E402
+from atios_test.dali import Target, TargetType  # noqa: E402
+from atios_test.nvram import (  # noqa: E402
     INSTANCE_LIGHT,
     INSTANCE_OCCUPANCY,
     INSTANCE_PUSHBUTTON,

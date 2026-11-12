@@ -119,38 +119,38 @@ class AtiosLight(LightEntity):
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:
-        if self._rgbw is not None:
-            try:
+        try:
+            if self._rgbw is not None:
                 await self._rgbw.turn_on(
                     self._target, brightness=kwargs.get(ATTR_BRIGHTNESS),
                     rgbw=kwargs.get(ATTR_RGBW_COLOR), rgb=kwargs.get(ATTR_RGB_COLOR),
                 )
-            except DaliError as err:
-                raise HomeAssistantError(str(err)) from err
-            return
-        if ATTR_BRIGHTNESS in kwargs:
-            dali = ha_brightness_to_dali(kwargs[ATTR_BRIGHTNESS])
-            await self._hub.send_frame(level(self._target, dali))
-            self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
-        else:
-            # Plain "on": restore the level the gear had before it was switched
-            # off (GO TO LAST ACTIVE LEVEL), rather than forcing full brightness.
-            await self._hub.send_frame(goto_last_active(self._target))
-            # Actual level is read back by async_update for single addresses;
-            # optimistic only for broadcast/group.
-            if self._target.type is not TargetType.SHORT and self._attr_brightness is None:
-                self._attr_brightness = 255
+                return
+            if ATTR_BRIGHTNESS in kwargs:
+                dali = ha_brightness_to_dali(kwargs[ATTR_BRIGHTNESS])
+                await self._hub.send_frame(level(self._target, dali))
+                self._attr_brightness = kwargs[ATTR_BRIGHTNESS]
+            else:
+                # Plain "on": restore the level the gear had before it was switched
+                # off (GO TO LAST ACTIVE LEVEL), rather than forcing full brightness.
+                await self._hub.send_frame(goto_last_active(self._target))
+                # Actual level is read back by async_update for single addresses;
+                # optimistic only for broadcast/group.
+                if self._target.type is not TargetType.SHORT and self._attr_brightness is None:
+                    self._attr_brightness = 255
+        except DaliError as err:
+            raise HomeAssistantError(str(err)) from err
         self._attr_is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
-        if self._rgbw is not None:
-            try:
+        try:
+            if self._rgbw is not None:
                 await self._rgbw.turn_off(self._target)
-            except DaliError as err:
-                raise HomeAssistantError(str(err)) from err
-            return
-        await self._hub.send_frame(off(self._target))
+                return
+            await self._hub.send_frame(off(self._target))
+        except DaliError as err:
+            raise HomeAssistantError(str(err)) from err
         self._attr_is_on = False
         self.async_write_ha_state()
 
@@ -164,7 +164,10 @@ class AtiosLight(LightEntity):
             return
         if self._target.type is not TargetType.SHORT:
             return
-        answer = await self._hub.send_frame(query_actual_level(self._target))
+        try:
+            answer = await self._hub.send_frame(query_actual_level(self._target))
+        except DaliError as err:
+            raise HomeAssistantError(str(err)) from err
         if not answer:
             return
         lvl = answer[0]

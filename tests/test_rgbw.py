@@ -8,20 +8,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-# Same pure-module loading as test_nvram.py; Home Assistant is not required.
+# Same isolated pure-module loading as test_nvram.py; HA is not required.
 _root = Path(__file__).resolve().parent.parent
-for _name, _path in (
-    ("custom_components", _root / "custom_components"),
-    ("custom_components.atios", _root / "custom_components" / "atios"),
-):
-    if _name not in sys.modules:
-        _pkg = types.ModuleType(_name)
-        _pkg.__path__ = [str(_path)]
-        sys.modules[_name] = _pkg
+if "atios_test" not in sys.modules:
+    _pkg = types.ModuleType("atios_test")
+    _pkg.__path__ = [str(_root / "custom_components" / "atios")]
+    sys.modules["atios_test"] = _pkg
 
-from custom_components.atios.dali import Frame, Target, goto_scene, level, off, query_actual_level  # noqa: E402
-from custom_components.atios.rgbw import RGBWController, RGBWState  # noqa: E402
-from custom_components.atios.transport import DaliError, DaliTransport, parse_response  # noqa: E402
+from atios_test.dali import Frame, Target, goto_scene, level, off, query_actual_level  # noqa: E402
+from atios_test.rgbw import RGBWController, RGBWState  # noqa: E402
+from atios_test.transport import DaliError, DaliTransport, parse_response  # noqa: E402
 
 T = Target.short(5)
 # Literal frames: IEC 62386-209/python-dali reference used by test_dali.py.
@@ -61,6 +57,25 @@ def controller():
     owner.states[T] = RGBWState(T)
     owner.members[T] = (T,)
     return owner, request
+
+
+@pytest.mark.parametrize("member_on,expected_on", [
+    ((None, None), None), ((False, False), False), ((False, None), None),
+    ((True, False), True), ((True, None), True), ((True, True), True),
+])
+def test_group_reports_only_common_values(controller, member_on, expected_on):
+    owner, _ = controller
+    other, group = Target.short(6), Target.group(1)
+    owner.states[T] = RGBWState(T, rgbw=(255, 0, 0, 128), brightness=128, is_on=member_on[0])
+    owner.states[other] = RGBWState(other, rgbw=(0, 255, 0, 128), brightness=128, is_on=member_on[1])
+    owner.members[group] = (T, other)
+    state = owner.state(group)
+    assert state.is_on is expected_on
+    assert state.rgbw is None and state.brightness == 128
+    assert state.available and state.assumed
+    assert owner.white_level(group) == 128
+    owner.states[other].rgbw = None
+    assert owner.white_level(group) is None
 
 
 @pytest.mark.parametrize("reason", [

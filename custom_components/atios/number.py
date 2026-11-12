@@ -7,11 +7,13 @@ import math
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import AtiosConfigEntry
 from .const import DOMAIN
+from .dali import Target
+from .hub import AtiosHub
 from .transport import DaliError
 
 
@@ -37,7 +39,9 @@ class AtiosWhiteLevel(NumberEntity):
     _attr_mode = NumberMode.SLIDER
     _attr_icon = "mdi:lightbulb-on-outline"
 
-    def __init__(self, hub, entry, target, name=None) -> None:
+    def __init__(
+        self, hub: AtiosHub, entry: AtiosConfigEntry, target: Target, name: str | None = None
+    ) -> None:
         self._controller = hub.rgbw
         self._target = target
         # Match the existing light's device and identity convention.

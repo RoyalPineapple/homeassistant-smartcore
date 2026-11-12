@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import logging
 import time
+from typing import TypedDict, Unpack, cast
 
 from .dali import (
     MASK, OP_DT8_ASSIGNED_COLOUR, OP_DT8_FEATURES, OP_DT8_STATUS, OP_DT8_QUERY_CONTROL,
-    RGBW_CONTROL, PRESERVE, Target, byte, channel_from_dali, channel_to_dali,
+    RGBW_CONTROL, PRESERVE, Frame, Target, byte, channel_from_dali, channel_to_dali,
     dali_level_to_ha_brightness, dt8, dtr, level, off, query_actual_level,
     query_colour, rgbw_frames, rgbw_level,
 )
 from .nvram import ControlDevice, rgbw_group_members
-from .transport import DaliError, DaliTransport
+from .transport import DaliError, DaliTransport, FrameSender
 
 _LOGGER = logging.getLogger(__name__)
 _STATE_ERRORS = {
@@ -24,15 +25,34 @@ _STATE_ERRORS = {
     "unknown_colour", "unknown_brightness", "incompatible_decomposition_use_full_rgbw",
 }
 
+RGB = tuple[int, int, int]
+RGBW = tuple[int, int, int, int]
 
-async def _sequence(send, frames):
+
+class _Change(TypedDict, total=False):
+    brightness: int
+    rgbw: RGBW
+    rgb: RGB
+    white: int
+    turn_on: bool
+    turn_off: bool
+
+
+@dataclass
+class _PendingChange:
+    patch: _Change
+    future: asyncio.Future[None]
+    barrier: bool
+
+
+async def _sequence(send: FrameSender, frames: Sequence[Frame]) -> list[int] | None:
     result = None
     for frame in frames:
         result = await send(frame)
     return result
 
 
-async def _value(send, target: Target, selector: int) -> int | None:
+async def _value(send: FrameSender, target: Target, selector: int) -> int | None:
     answer = await _sequence(send, query_colour(target, selector))
     return answer[0] if answer is not None and answer[0] != MASK else None
 
@@ -41,7 +61,7 @@ async def _value(send, target: Target, selector: int) -> int | None:
 class RGBWSettings:
     """A requested/restorable HA decomposition, not a measured light output."""
 
-    rgbw: tuple[int, int, int, int]
+    rgbw: RGBW
     brightness: int
     is_on: bool
 
@@ -50,7 +70,7 @@ class RGBWSettings:
 class RGBWReport:
     """The last complete successful set of actual driver queries."""
 
-    channels: tuple[int, int, int, int]
+    channels: RGBW
     arc: int
     control: int
     observed_at: float
@@ -61,7 +81,7 @@ class RGBWState:
     """One short address; groups reference these same objects."""
 
     target: Target
-    rgbw: tuple[int, int, int, int] | None = None
+    rgbw: RGBW | None = None
     brightness: int | None = None
     is_on: bool | None = None
     assumed: bool = True
@@ -80,8 +100,8 @@ class RGBWController:
         self.states: dict[Target, RGBWState] = {}
         self.members: dict[Target, tuple[Target, ...]] = {}
         self._listeners: list[Callable[[], None]] = []
-        self._pending: dict[Target, deque[tuple[dict, asyncio.Future, bool]]] = {}
-        self._workers: dict[Target, asyncio.Task] = {}
+        self._pending: dict[Target, deque[_PendingChange]] = {}
+        self._workers: dict[Target, asyncio.Task[None]] = {}
         self._closed = False
 
     async def close(self) -> None:
@@ -93,11 +113,13 @@ class RGBWController:
         await asyncio.gather(*workers, return_exceptions=True)
         self._workers.clear()
         for queue in self._pending.values():
-            for _, future, _ in queue:
-                future.cancel()
+            for pending in queue:
+                pending.future.cancel()
         self._pending.clear()
 
-    async def _submit(self, target: Target, *, barrier: bool = False, **patch) -> None:
+    async def _submit(
+        self, target: Target, *, barrier: bool = False, **patch: Unpack[_Change]
+    ) -> None:
         """Coalesce slider edits, without crossing an ordered power command.
 
         Each target admits at most eight pending entries. Consecutive slider
@@ -110,41 +132,44 @@ class RGBWController:
         if target not in self.members:
             raise ValueError("Target was not verified for RGBW")
         queue = self._pending.setdefault(target, deque())
-        if queue and not barrier and not queue[-1][2]:
-            pending, future, _ = queue[-1]
+        if queue and not barrier and not queue[-1].barrier:
+            pending = queue[-1]
         else:
             if len(queue) >= 8:
                 raise DaliError("queue_full")
-            future = asyncio.get_running_loop().create_future()
+            future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             # A caller may cancel after acceptance; still retrieve failures.
             future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
-            pending = {}
-            queue.append((pending, future, barrier))
+            pending = _PendingChange({}, future, barrier)
+            queue.append(pending)
         if patch.get("rgbw") is not None:
-            pending.pop("rgb", None)
-            pending.pop("white", None)
-        if patch.get("rgb") is not None and pending.get("rgbw") is not None:
-            pending["rgbw"] = (*patch.pop("rgb"), pending["rgbw"][3])
-        pending.update(patch)
+            pending.patch.pop("rgb", None)
+            pending.patch.pop("white", None)
+        rgb = patch.get("rgb")
+        queued_rgbw = pending.patch.get("rgbw")
+        if rgb is not None and queued_rgbw is not None:
+            pending.patch["rgbw"] = (*rgb, queued_rgbw[3])
+            del patch["rgb"]
+        pending.patch.update(patch)
         if target not in self._workers:
             self._workers[target] = asyncio.create_task(self._run_pending(target))
-        await asyncio.shield(future)
+        await asyncio.shield(pending.future)
 
     async def _run_pending(self, target: Target) -> None:
         try:
             while queue := self._pending.get(target):
-                patch, future, _ = queue.popleft()
+                pending = queue.popleft()
                 if not queue:
                     del self._pending[target]
                 try:
-                    await self._change(target, **patch)
+                    await self._change(target, **pending.patch)
                 except asyncio.CancelledError:
-                    future.cancel()
+                    pending.future.cancel()
                     raise
                 except Exception as err:
-                    future.set_exception(err)
+                    pending.future.set_exception(err)
                 else:
-                    future.set_result(None)
+                    pending.future.set_result(None)
         finally:
             self._workers.pop(target, None)
 
@@ -169,21 +194,32 @@ class RGBWController:
         members = [self.states[t] for t in self.members[target]]
         if len(members) == 1:
             return members[0]
-        def common(attr):
-            values = [getattr(s, attr) for s in members]
-            return values[0] if all(v == values[0] for v in values) else None
+        first = members[0]
+        is_on = None
+        if any(state.is_on for state in members):
+            is_on = True
+        elif all(state.is_on is False for state in members):
+            is_on = False
         return RGBWState(
-            target=target, rgbw=common("rgbw"), brightness=common("brightness"),
-            is_on=True if any(s.is_on for s in members) else common("is_on"),
+            target=target,
+            rgbw=first.rgbw if all(s.rgbw == first.rgbw for s in members) else None,
+            brightness=(
+                first.brightness
+                if all(s.brightness == first.brightness for s in members)
+                else None
+            ),
+            is_on=is_on,
             assumed=True, available=all(s.available for s in members),
         )
 
     def white_level(self, target: Target) -> int | None:
         """A group may share W even when its members have different RGB."""
-        mixes = [self.states[t].rgbw for t in self.members[target]]
-        if any(mix is None for mix in mixes):
-            return None
-        whites = [mix[3] for mix in mixes]
+        whites = []
+        for member in self.members[target]:
+            mix = self.states[member].rgbw
+            if mix is None:
+                return None
+            whites.append(mix[3])
         return whites[0] if all(w == whites[0] for w in whites) else None
 
     async def discover(self, devices: list[ControlDevice], *, complete: bool) -> None:
@@ -221,7 +257,7 @@ class RGBWController:
             self.members[target] = (target,)
         self.members.update(rgbw_group_members(devices, set(self.states), complete=complete))
 
-    async def _read(self, send, state: RGBWState) -> None:
+    async def _read(self, send: FrameSender, state: RGBWState) -> None:
         """Read actual values; don't manufacture zero on missing/MASK replies."""
         answer = await send(query_actual_level(state.target))
         if answer is None or answer[0] == MASK:
@@ -236,36 +272,50 @@ class RGBWController:
         if control != RGBW_CONTROL:
             state.rgbw = None
             raise DaliError("unsupported_control_state")
-        channels = [await _value(send, state.target, n) for n in range(9, 13)]
-        if any(v is None for v in channels):
+        channel_values = [await _value(send, state.target, n) for n in range(9, 13)]
+        if any(value is None for value in channel_values):
             state.rgbw = None
             raise DaliError("no_colour_response")
+        channels = cast(RGBW, tuple(channel_values))
         peak = max(channels)
-        state.reported = RGBWReport(tuple(channels), arc, control, time.monotonic())
+        state.reported = RGBWReport(channels, arc, control, time.monotonic())
         previous = state.requested or state.last_usable
-        expected_channels = tuple(channel_to_dali(v) for v in previous.rgbw) if previous else None
         # Preserve the exact caller decomposition only when the report agrees,
         # including the effective master level. Off retains the last brightness.
-        compatible = previous is not None and expected_channels == tuple(channels)
-        if compatible:
-            expected_arc = rgbw_level(previous.rgbw, previous.brightness) if previous.is_on else 0
-            compatible = arc == expected_arc
-        if previous is not None and arc == 0 and state.pending_white is not None:
-            compatible = expected_channels[:3] == tuple(channels[:3])
-        if compatible:
+        compatible = False
+        if previous is not None:
+            expected_channels = tuple(channel_to_dali(v) for v in previous.rgbw)
+            if arc == 0 and state.pending_white is not None:
+                compatible = expected_channels[:3] == channels[:3]
+            elif expected_channels == channels:
+                expected_arc = 0
+                if previous.is_on:
+                    expected_arc = rgbw_level(previous.rgbw, previous.brightness)
+                compatible = arc == expected_arc
+        if compatible and previous is not None:
             state.rgbw, state.brightness = previous.rgbw, previous.brightness
         else:
             # External intent cannot be recovered. Prefer raw channel levels
             # with an inferred master; if that would exceed 255, use a full
             # scale mix and the actual master. Both are deterministic forms.
             if peak and arc <= peak:
-                state.rgbw = tuple(channel_from_dali(v) for v in channels)
-                state.brightness = (dali_level_to_ha_brightness(round(arc * 254 / peak))
-                                    if arc else previous.brightness if previous else 255)
+                state.rgbw = cast(RGBW, tuple(channel_from_dali(v) for v in channels))
+                master_level = round(arc * 254 / peak)
             else:
-                state.rgbw = tuple(channel_from_dali(round(v * 254 / peak)) for v in channels) if peak else (0, 0, 0, 0)
-                state.brightness = (dali_level_to_ha_brightness(arc) if arc else
-                                    previous.brightness if previous else 255)
+                if peak:
+                    state.rgbw = cast(
+                        RGBW,
+                        tuple(channel_from_dali(round(v * 254 / peak)) for v in channels),
+                    )
+                else:
+                    state.rgbw = (0, 0, 0, 0)
+                master_level = arc
+            if arc:
+                state.brightness = dali_level_to_ha_brightness(master_level)
+            elif previous is not None:
+                state.brightness = previous.brightness
+            else:
+                state.brightness = 255
             state.requested = None
         state.is_on = arc > 0 and peak > 0
         state.assumed = False
@@ -293,7 +343,13 @@ class RGBWController:
                     state = self.states[member]
                     # Group and individual entities share the same refresh.
                     # Commands always read freshly, independent of this limit.
-                    if not force and not state.assumed and state.available and state.reported is not None and time.monotonic() - state.reported.observed_at < 2:
+                    if (
+                        not force
+                        and not state.assumed
+                        and state.available
+                        and state.reported is not None
+                        and time.monotonic() - state.reported.observed_at < 2
+                    ):
                         continue
                     await self._read(send, state)
         except DaliError as err:
@@ -307,8 +363,8 @@ class RGBWController:
 
     async def turn_on(
         self, target: Target, *, brightness: int | None = None,
-        rgbw: tuple[int, int, int, int] | None = None,
-        rgb: tuple[int, int, int] | None = None,
+        rgbw: RGBW | None = None,
+        rgb: RGB | None = None,
     ) -> None:
         if brightness is not None:
             byte(brightness)
@@ -323,8 +379,14 @@ class RGBWController:
         if brightness is None and rgbw is None and rgb is None:
             await self._submit(target, barrier=True, turn_on=True)
         else:
-            patch = {key: value for key, value in dict(brightness=brightness, rgbw=rgbw, rgb=rgb).items() if value is not None}
-            await self._submit(target, **patch, turn_on=True)
+            patch: _Change = {"turn_on": True}
+            if brightness is not None:
+                patch["brightness"] = brightness
+            if rgbw is not None:
+                patch["rgbw"] = rgbw
+            if rgb is not None:
+                patch["rgb"] = rgb
+            await self._submit(target, **patch)
 
     async def set_white(self, target: Target, value: int) -> None:
         await self._submit(target, white=byte(value))
@@ -333,8 +395,9 @@ class RGBWController:
         await self._submit(target, barrier=True, turn_off=True)
 
     async def _change(
-        self, target: Target, *, brightness=None, rgbw=None, rgb=None,
-        white=None, turn_off=False, turn_on=False,
+        self, target: Target, *, brightness: int | None = None,
+        rgbw: RGBW | None = None, rgb: RGB | None = None,
+        white: int | None = None, turn_off: bool = False, turn_on: bool = False,
     ) -> None:
         if self._closed:
             raise DaliError("closed")
@@ -368,10 +431,10 @@ class RGBWController:
                             state.requested = RGBWSettings(state.rgbw, state.brightness or 255, False)
                             state.last_usable = state.requested
                         continue
-                    mix = tuple(rgbw) if rgbw is not None else state.rgbw
+                    mix = rgbw if rgbw is not None else state.rgbw
                     if mix is None:
                         raise DaliError("unknown_colour")
-                    intents = list(mix) if rgbw is not None else [PRESERVE] * 4
+                    intents: list[int | None] = list(mix) if rgbw is not None else [PRESERVE] * 4
                     if rgb is not None:
                         mix = (*rgb, mix[3])
                         intents[:3] = rgb
@@ -390,13 +453,18 @@ class RGBWController:
                             state.last_usable = state.requested
                             continue
                     bri = brightness if brightness is not None else state.brightness or 255
-                    if (any(v is not PRESERVE for v in intents) and state.reported is not None
-                            and any(intent is PRESERVE and channel_to_dali(mix[i]) != state.reported.channels[i]
-                                    for i, intent in enumerate(intents))):
-                        # An externally rescaled mix cannot be combined with
-                        # literal MASK and full-range explicit channels safely.
-                        raise DaliError("incompatible_decomposition_use_full_rgbw")
-                    await _sequence(send, rgbw_frames(member, tuple(intents)))
+                    if any(value is not PRESERVE for value in intents) and state.reported is not None:
+                        preserved_channels_changed = any(
+                            intent is PRESERVE and channel_to_dali(value) != actual
+                            for intent, value, actual in zip(intents, mix, state.reported.channels)
+                        )
+                        if preserved_channels_changed:
+                            # MASK cannot preserve an externally rescaled mix.
+                            raise DaliError("incompatible_decomposition_use_full_rgbw")
+                    channel_intents = cast(
+                        tuple[int | None, int | None, int | None, int | None], tuple(intents)
+                    )
+                    await _sequence(send, rgbw_frames(member, channel_intents))
                     await send(level(member, rgbw_level(mix, bri)))
                     state.rgbw = mix
                     state.brightness = bri
