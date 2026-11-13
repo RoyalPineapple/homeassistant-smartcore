@@ -25,6 +25,7 @@ from .dali import Frame, Target, goto_scene
 from .hub import AtiosHub
 from .nvram import parse_control_devices, parse_input_devices
 from .panel import async_register_panel, async_remove_panel
+from .rgbw import RGBWController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.EVENT,
     Platform.LIGHT,
+    Platform.NUMBER,
     Platform.SENSOR,
     Platform.UPDATE,
 ]
@@ -67,6 +69,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: AtiosConfigEntry) -> boo
         hub.control_devices = parse_control_devices(raw_control)
     if raw_inputs is not None:
         hub.input_devices = parse_input_devices(raw_inputs)
+
+    hub.rgbw = RGBWController(hub.transport)
+    await hub.rgbw.discover(
+        hub.control_devices,
+        complete=hub.control_inventory_complete and not any(d.get("collision") for d in raw_control or ()),
+    )
+    hub.rgbw_targets = hub.rgbw.members
 
     await hub.async_start()
     entry.runtime_data = hub

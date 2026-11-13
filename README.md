@@ -81,6 +81,7 @@ We plan to submit this integration to Home Assistant core in a bit.
 | DALI frame encode/decode (`dali.py`) | ✅ verified against reference frames (`FF 10` goto-scene, `01 91` query-gear-present) |
 | Transport (`hub.py`) | ✅ native aiohttp; HTTP `/api/dali/iface` confirmed on device; `daliMonitor` stream on `ws://<host>/` (needs **DALI IP Interface** on) |
 | Broadcast light + brightness/on/off | ✅ |
+| Native DT8 RGBW + independent White level | Implemented locally; software tests and hardware-validation status in [RGBW documentation](docs/rgbw.md) |
 | NVRAM device model (`nvram.py`) | ✅ reads `/api/dali/nvm` (control + input devices, paginated); parser verified against captured fixtures |
 | Named lights from NVRAM | ✅ every configured short address and group becomes a named light; legacy options list as fallback |
 | QUERY status read | ✅ HTTP answer shape confirmed on device (`{success,bus_busy,collision_detected,data}`) |
@@ -93,7 +94,18 @@ We plan to submit this integration to Home Assistant core in a bit.
 | Firmware `update` entity | ✅ installed version from `/ota_status`; latest-version source still needed for update *notifications* |
 | Web-UI iframe panel | ✅ sidebar panel via options flow; probes for X-Frame-Options / CSP / mixed-content and warns |
 
-Confirmed on SmartCore firmware 3.2.3.
+Existing baseline features were confirmed on SmartCore firmware 3.2.3. The new
+RGBW path has **not** been validated on SmartCore or Lunatone hardware.
+
+## RGBW and physical white control
+
+Verified-capable four-channel DT8 RGBW targets receive a native RGBW light and a
+separate **White level** slider. RGB edits preserve W; white edits preserve RGB;
+brightness is independent. Both entities share one controller and driver reports.
+DT6, tunable-white-only, unknown and mixed targets stay brightness-only.
+
+See [RGBW semantics, limitations and removal](docs/rgbw.md) and the
+[deferred hardware checklist](docs/rgbw-hardware-checklist.md).
 
 ## Contributing
 

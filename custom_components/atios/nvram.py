@@ -47,10 +47,18 @@ class ControlDevice:
     device_type_selected: int = 0
     min_level: int = 1
     max_level: int = 254
+    color_type_features: int | None = None
+    groups_known: bool = False
 
     @property
     def target(self) -> Target:
         return Target.group(self.number) if self.is_group else Target.short(self.number)
+
+    @property
+    def dt8_candidate(self) -> bool:
+        """Selected DT6 must stay brightness-only, even if DT8 is also listed."""
+        return (self.device_type_selected in (0, 8)
+                and (8 in self.device_types or self.device_type_selected == 8))
 
 
 @dataclass(frozen=True)
@@ -110,9 +118,27 @@ def parse_control_devices(devices: list[dict]) -> list[ControlDevice]:
                 device_type_selected=d.get("device_type_selected", 0),
                 min_level=d.get("min_level", 1),
                 max_level=d.get("max_level", 254),
+                color_type_features=d.get("color_type_features"),
+                groups_known=isinstance(d.get("gear_groups"), list)
+                and all(type(g) is int and 0 <= g <= 15 for g in d["gear_groups"]),
             )
         )
     return out
+
+
+def rgbw_group_members(
+    devices: list[ControlDevice], verified: set[Target], *, complete: bool
+) -> dict[Target, tuple[Target, ...]]:
+    """Only groups with a complete known inventory and verified RGBW members."""
+    shorts = [d for d in devices if not d.is_group]
+    if not complete or not shorts or not all(d.groups_known for d in shorts):
+        return {}
+    groups = {}
+    for group in (d for d in devices if d.is_group):
+        members = tuple(d.target for d in shorts if group.number in d.gear_groups)
+        if members and all(t in verified for t in members):
+            groups[group.target] = members
+    return groups
 
 
 def parse_input_devices(devices: list[dict]) -> list[InputDevice]:

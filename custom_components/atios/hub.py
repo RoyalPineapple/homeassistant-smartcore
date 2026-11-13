@@ -51,6 +51,7 @@ import aiohttp
 
 from .const import LUNATONE_GREETING_TIMEOUT_S, RECONNECT_MAX, RECONNECT_MIN
 from .dali import Frame
+from .transport import DaliError, DaliTransport, parse_response
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -156,7 +157,11 @@ class AtiosHub:
         self._stream_cbs: list[Callable[[bool], None]] = []
         self._info: dict = {}
         self.control_devices: list = []  # nvram.ControlDevice, set at setup
+        self.control_inventory_complete = False
         self.input_devices: list = []  # nvram.InputDevice, set at setup
+        self.rgbw_targets: dict = {}  # target -> shared RGBW control/state owner
+        self.rgbw = None  # populated before platforms are forwarded
+        self.transport = DaliTransport(self._request_frame)
 
     @property
     def host(self) -> str:
@@ -249,6 +254,8 @@ class AtiosHub:
         fall back.
         """
         devices: list[dict] = []
+        if section == "control_devices":
+            self.control_inventory_complete = False
         offset = 0
         for _ in range(32):  # 32 * 4 = 128 > max 64 addresses + groups
             url = (
@@ -271,6 +278,8 @@ class AtiosHub:
             devices.extend((body.get("data") or {}).get(section) or [])
             pagination = body.get("pagination") or {}
             if not pagination.get("has_more"):
+                if section == "control_devices":
+                    self.control_inventory_complete = True
                 break
             offset += pagination.get("limit", 4)
         return devices
@@ -313,6 +322,9 @@ class AtiosHub:
 
     async def async_stop(self) -> None:
         self._closing = True
+        if self.rgbw is not None:
+            await self.rgbw.close()
+        await self.transport.close()
         if self._task:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -419,10 +431,15 @@ class AtiosHub:
     # ---- sending / querying (HTTP, confirmed) -----------------------------
 
     async def send_frame(self, frame: Frame) -> list[int] | None:
-        """Send a DALI frame over the confirmed HTTP endpoint.
+        """Serialize raw services, scenes, lights and queries on one transport."""
+        try:
+            return await self.transport.send_frame(frame)
+        finally:
+            if self.rgbw is not None and not frame.wait_for_answer:
+                self.rgbw.invalidate()
 
-        Returns the answer byte(s) as list[int] for QUERY frames, else None.
-        """
+    async def _request_frame(self, frame: Frame) -> list[int] | None:
+        """One HTTP exchange, called only while the transport lock is held."""
         payload = {
             "repeat_twice": frame.send_twice,
             "wait_response": frame.wait_for_answer,
@@ -435,31 +452,23 @@ class AtiosHub:
                 url, json=payload, timeout=aiohttp.ClientTimeout(total=5)
             ) as resp:
                 resp.raise_for_status()
-                if not frame.wait_for_answer:
-                    return None
                 body = await resp.json(content_type=None)
-                # {"success":true,"bus_busy":false,"collision_detected":false,"data":255}
-                if not isinstance(body, dict):
-                    return None
-                if body.get("collision_detected"):
-                    _LOGGER.debug("Atios %s: DALI collision on %s", self._host, frame.data)
-                answer = body.get("data")
-                if answer is None:
-                    return None
-                if isinstance(answer, int):
-                    return [answer]
-                if isinstance(answer, list):
-                    return answer
-                return None
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Atios %s: HTTP send failed: %s", self._host, err)
-            return None
+        except TimeoutError as err:
+            raise DaliError("timeout") from err
+        except aiohttp.ClientError as err:
+            raise DaliError("http_error") from err
+        except (ValueError, TypeError) as err:
+            raise DaliError("malformed_response") from err
+        return parse_response(body, frame)
 
     async def async_test_connection(self) -> bool:
         """Config-flow reachability check: gear-present query over HTTP."""
         from .dali import OP_QUERY_CONTROL_GEAR_PRESENT, Target, query
 
-        result = await self.send_frame(query(Target.short(0), OP_QUERY_CONTROL_GEAR_PRESENT))
+        try:
+            result = await self.send_frame(query(Target.short(0), OP_QUERY_CONTROL_GEAR_PRESENT))
+        except DaliError:
+            return False
         if result is not None:
             return True
         # gear may not answer; treat a live HTTP endpoint as reachable

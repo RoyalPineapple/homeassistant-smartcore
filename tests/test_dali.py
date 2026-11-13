@@ -90,6 +90,38 @@ def test_24bit_command_is_not_event():
     assert dali.decode_input_event([6, 4, 1], 24).gesture == "button_pressed"
 
 
+def test_rgbw_channel_values_and_preservation():
+    assert dali.channel_to_dali(0) == 0
+    assert dali.channel_to_dali(255) == 254
+    assert all(dali.channel_to_dali(v) != dali.MASK for v in range(256))
+    assert dali.channel_from_dali(0) == 0
+    assert dali.channel_from_dali(255) is None
+    # RGB-only: explicit maximum/zero remain levels; W/A/F use MASK.
+    frames = dali.rgbw_frames(T.short(5), (255, 0, 128, dali.PRESERVE))
+    assert [f.data for f in frames][3:13] == [
+        [0xA3, 0xFE], [0xC3, 0x00], [0xC5, 0x7F], [0xC1, 8], [0x0B, 0xEB],
+        [0xA3, 0xFF], [0xC3, 0xFF], [0xC5, 0xFF], [0xC1, 8], [0x0B, 0xEC],
+    ]
+    frames = dali.rgbw_frames(T.short(5), (None, None, None, 255))
+    assert [f.data for f in frames][3:13] == [
+        [0xA3, 0xFF], [0xC3, 0xFF], [0xC5, 0xFF], [0xC1, 8], [0x0B, 0xEB],
+        [0xA3, 0xFE], [0xC3, 0xFF], [0xC5, 0xFF], [0xC1, 8], [0x0B, 0xEC],
+    ]
+
+
+def test_rgbw_golden_sequence():
+    # Literal register/opcode reference: python-dali colour.py at b1881c008aca.
+    frames = dali.rgbw_frames(T.short(5), (255, 0, 64, 128))
+    assert [f.data for f in frames] == [
+        [0xA3, 0x80], [0xC1, 8], [0x0B, 0xED],
+        [0xA3, 0xFE], [0xC3, 0x00], [0xC5, 0x40], [0xC1, 8], [0x0B, 0xEB],
+        [0xA3, 0x7F], [0xC3, 0xFF], [0xC5, 0xFF], [0xC1, 8], [0x0B, 0xEC],
+        [0xC1, 8], [0x0B, 0xE2],
+    ]
+    assert dali.rgbw_level((0, 0, 0, 128), 255) == 127
+    assert dali.rgbw_level((0, 0, 0, 0), 255) == 0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
